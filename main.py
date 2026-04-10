@@ -200,14 +200,22 @@ def main():
     start_hour = 10
     start_minute = 0
     try:
-        T_minutes = float(input("Введите время моделирования в минутах: "))
-        lam = float(input("Введите интенсивность потока поездов(количество поездов в минуту): "))
-        experiments = int(input("Введите количество экспериментов: "))
-        validate_input(T_minutes, lam, experiments, avr_vagons, avr_dev)
-        first_arrivals, first_wagons, summary_stats = run_multiple_experiments(T_minutes=T_minutes, lam=lam, experiments=experiments, start_hour=start_hour,start_minute=start_minute,avr_wagons=avr_vagons, avr_div=avr_dev)
-        single_stats = calculate_statistics(first_arrivals,first_wagons,T_minutes,lam,avr_vagons)
-        print_statistics(single_stats, summary_stats)
-        plot_results(first_arrivals,first_wagons,T_minutes,lam,avr_vagons,start_hour,start_minute)
+        while(True):
+            print(("-"*20)+"\nМеню\n"+("-"*20)+"\n1 - Начать моделирование\n0 - выход")
+            choice = int(input("Ваш выбор: "))
+            if(choice == 1):
+                T_minutes = float(input("Введите время моделирования в минутах: "))
+                lam = float(input("Введите интенсивность потока поездов(количество поездов в минуту): "))
+                experiments = int(input("Введите количество экспериментов: "))
+                validate_input(T_minutes, lam, experiments, avr_vagons, avr_dev)
+                first_arrivals, first_wagons, summary_stats = run_multiple_experiments(T_minutes=T_minutes, lam=lam, experiments=experiments, start_hour=start_hour,start_minute=start_minute,avr_wagons=avr_vagons, avr_div=avr_dev)
+                single_stats = calculate_statistics(first_arrivals,first_wagons,T_minutes,lam,avr_vagons)
+                print_statistics(single_stats, summary_stats)
+                plot_results(first_arrivals,first_wagons,T_minutes,lam,avr_vagons,start_hour,start_minute)
+            elif(choice == 0):
+                break
+            else:
+                print("Неверный выбор")
     except ValueError as error:
         print(f"Ошибка ввода: {error}")
 
