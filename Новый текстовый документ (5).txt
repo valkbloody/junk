@@ -1,0 +1,304 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+# ----------------------------
+# Проверка входных параметров
+# ----------------------------
+def validate_input(T_minutes, lam, experiments, mean_wagons, std_wagons):
+    if T_minutes <= 0:
+        raise ValueError("Время моделирования должно быть больше 0.")
+    if lam <= 0:
+        raise ValueError("Интенсивность потока поездов должна быть больше 0.")
+    if experiments <= 0:
+        raise ValueError("Количество экспериментов должно быть больше 0.")
+    if mean_wagons <= 0:
+        raise ValueError("Среднее число вагонов должно быть больше 0.")
+    if std_wagons < 0:
+        raise ValueError("Стандартное отклонение не может быть отрицательным.")
+
+
+# ----------------------------------------
+# Форматирование времени в вид HH:MM
+# total_minutes - минуты от начала модели
+# start_hour/start_minute - время старта
+# ----------------------------------------
+def format_time(total_minutes, start_hour=8, start_minute=0):
+    total = start_hour * 60 + start_minute + int(total_minutes)
+    hours = (total // 60) % 24
+    minutes = total % 60
+    return f"{hours:02d}:{minutes:02d}"
+
+
+# -------------------------------------------------------
+# Генерация количества вагонов в одном поезде
+# Нормальное распределение, округление, минимум 1 вагон
+# -------------------------------------------------------
+def generate_wagon_count(mean_wagons, std_wagons):
+    wagons = round(np.random.normal(mean_wagons, std_wagons))
+    return max(1, wagons)
+
+
+# -------------------------------------------------------
+# Один эксперимент моделирования
+# T_minutes - время моделирования в минутах
+# lam - интенсивность потока поездов (поездов в минуту)
+# -------------------------------------------------------
+def simulate_one_experiment(T_minutes, lam, mean_wagons=10, std_wagons=4):
+    arrival_times = []
+    wagon_counts = []
+
+    current_time = 0.0
+
+    while True:
+        # Экспоненциальный интервал между поездами
+        delta_t = np.random.exponential(scale=1 / lam)
+        current_time += delta_t
+
+        if current_time > T_minutes:
+            break
+
+        wagons = generate_wagon_count(mean_wagons, std_wagons)
+
+        arrival_times.append(current_time)
+        wagon_counts.append(wagons)
+
+    return arrival_times, wagon_counts
+
+
+# -------------------------------------------------------
+# Расчет статистики одного эксперимента
+# -------------------------------------------------------
+def calculate_statistics(arrival_times, wagon_counts, T_minutes, lam, mean_wagons):
+    train_count = len(arrival_times)
+    total_wagons = sum(wagon_counts)
+
+    avg_wagons = total_wagons / train_count if train_count > 0 else 0.0
+
+    estimated_train_intensity = train_count / T_minutes
+    estimated_wagon_intensity = total_wagons / T_minutes
+
+    theoretical_train_intensity = lam
+    theoretical_wagon_intensity = lam * mean_wagons
+
+    return {
+        "Количество поездов": train_count,
+        "Количество вагонов": total_wagons,
+        "Среднее число вагонов на поезд": avg_wagons,
+        "Оценка интенсивности потока поездов": estimated_train_intensity,
+        "Теоретическая интенсивность потока поездов": theoretical_train_intensity,
+        "Оценка интенсивности потока вагонов": estimated_wagon_intensity,
+        "Теоретическая интенсивность потока вагонов": theoretical_wagon_intensity,
+    }
+
+
+# -------------------------------------------------------
+# Несколько экспериментов
+# Для таблицы и графиков сохраняем первый эксперимент
+# -------------------------------------------------------
+def run_multiple_experiments(T_minutes, lam, experiments, mean_wagons=10, std_wagons=4):
+    train_counts = []
+    wagon_totals = []
+    avg_wagons_list = []
+    train_intensities = []
+    wagon_intensities = []
+
+    first_arrivals = None
+    first_wagons = None
+
+    for i in range(experiments):
+        arrival_times, wagon_counts = simulate_one_experiment(
+            T_minutes, lam, mean_wagons, std_wagons
+        )
+
+        if i == 0:
+            first_arrivals = arrival_times
+            first_wagons = wagon_counts
+
+        stats = calculate_statistics(arrival_times, wagon_counts, T_minutes, lam, mean_wagons)
+
+        train_counts.append(stats["Количество поездов"])
+        wagon_totals.append(stats["Количество вагонов"])
+        avg_wagons_list.append(stats["Среднее число вагонов на поезд"])
+        train_intensities.append(stats["Оценка интенсивности потока поездов"])
+        wagon_intensities.append(stats["Оценка интенсивности потока вагонов"])
+
+    summary_stats = {
+        "Среднее количество поездов": np.mean(train_counts),
+        "Среднее количество вагонов": np.mean(wagon_totals),
+        "Среднее число вагонов на поезд": np.mean(avg_wagons_list),
+        "Средняя оценка интенсивности потока поездов": np.mean(train_intensities),
+        "Средняя оценка интенсивности потока вагонов": np.mean(wagon_intensities),
+        "Стандартное отклонение числа поездов": np.std(train_counts, ddof=1) if experiments > 1 else 0.0,
+        "Стандартное отклонение числа вагонов": np.std(wagon_totals, ddof=1) if experiments > 1 else 0.0,
+    }
+
+    return first_arrivals, first_wagons, summary_stats
+
+
+# -------------------------------------------------------
+# Печать таблицы поездов
+# -------------------------------------------------------
+def print_event_table(arrival_times, wagon_counts, start_hour=8, start_minute=0):
+    print("\nТаблица прибытия поездов")
+    print("-" * 46)
+    print(f"{'№':<6}{'Время':<12}{'Вагоны':<10}")
+    print("-" * 46)
+
+    for i, (t, w) in enumerate(zip(arrival_times, wagon_counts), start=1):
+        print(f"{i:<6}{format_time(t, start_hour, start_minute):<12}{w:<10}")
+
+    print("-" * 46)
+
+
+# -------------------------------------------------------
+# Печать статистики
+# -------------------------------------------------------
+def print_statistics(single_stats, summary_stats):
+    print("\nРезультаты одного эксперимента")
+    print("-" * 58)
+    for key, value in single_stats.items():
+        if isinstance(value, float):
+            print(f"{key}: {value:.3f}")
+        else:
+            print(f"{key}: {value}")
+
+    print("\nУсредненные результаты по серии экспериментов")
+    print("-" * 58)
+    for key, value in summary_stats.items():
+        if isinstance(value, float):
+            print(f"{key}: {value:.3f}")
+        else:
+            print(f"{key}: {value}")
+
+
+# -------------------------------------------------------
+# Подписи оси X в формате HH:MM
+# -------------------------------------------------------
+def build_time_ticks(T_minutes, start_hour=8, start_minute=0, step=60):
+    ticks = np.arange(0, T_minutes + 1, step)
+    labels = [format_time(t, start_hour, start_minute) for t in ticks]
+    return ticks, labels
+
+
+# -------------------------------------------------------
+# Построение графиков
+# -------------------------------------------------------
+def plot_results(arrival_times, wagon_counts, T_minutes, lam, mean_wagons, start_hour=8, start_minute=0):
+    if len(arrival_times) == 0:
+        print("За время моделирования не произошло ни одного прибытия.")
+        return
+
+    arrival_times = np.array(arrival_times)
+    wagon_counts = np.array(wagon_counts)
+
+    cumulative_trains = np.arange(1, len(arrival_times) + 1)
+    cumulative_wagons = np.cumsum(wagon_counts)
+
+    theoretical_train_x = np.array([0, T_minutes])
+    theoretical_train_y = lam * theoretical_train_x
+
+    theoretical_wagon_x = np.array([0, T_minutes])
+    theoretical_wagon_y = lam * mean_wagons * theoretical_wagon_x
+
+    ticks, labels = build_time_ticks(T_minutes, start_hour, start_minute, step=60)
+
+    plt.figure(figsize=(12, 10))
+
+    # График накопления поездов
+    plt.subplot(3, 1, 1)
+    plt.step(arrival_times, cumulative_trains, where="post", label="Смоделированный поток")
+    plt.plot(theoretical_train_x, theoretical_train_y, "--", label="Теоретическое ожидание")
+    plt.title("Накопленное количество поездов")
+    plt.xlabel("Время")
+    plt.ylabel("Число поездов")
+    plt.xticks(ticks, labels, rotation=45)
+    plt.grid(True)
+    plt.legend()
+
+    # График накопления вагонов
+    plt.subplot(3, 1, 2)
+    plt.step(arrival_times, cumulative_wagons, where="post", label="Смоделированный поток")
+    plt.plot(theoretical_wagon_x, theoretical_wagon_y, "--", label="Теоретическое ожидание")
+    plt.title("Накопленное количество вагонов")
+    plt.xlabel("Время")
+    plt.ylabel("Число вагонов")
+    plt.xticks(ticks, labels, rotation=45)
+    plt.grid(True)
+    plt.legend()
+
+    # Гистограмма количества вагонов
+    plt.subplot(3, 1, 3)
+    bins = range(int(min(wagon_counts)), int(max(wagon_counts)) + 2)
+    plt.hist(wagon_counts, bins=bins, edgecolor="black", align="left")
+    plt.title("Гистограмма числа вагонов в поезде")
+    plt.xlabel("Число вагонов")
+    plt.ylabel("Частота")
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+
+# -------------------------------------------------------
+# Главная функция
+# -------------------------------------------------------
+def main():
+    print("МОДЕЛИРОВАНИЕ НЕОРДИНАРНОГО ПОТОКА ВАГОНОВ")
+    print("Вариант 4: процесс появления вагонов на железнодорожной станции")
+    print()
+
+    # Параметры варианта
+    mean_wagons = 10
+    std_wagons = 4
+
+    # Начало отсчета времени
+    start_hour = 8
+    start_minute = 0
+
+    try:
+        T_minutes = float(input("Введите время моделирования в минутах: "))
+        lam = float(input("Введите интенсивность потока поездов (поездов в минуту): "))
+        experiments = int(input("Введите количество экспериментов: "))
+        seed_text = input("Введите seed (или нажмите Enter, чтобы пропустить): ").strip()
+
+        validate_input(T_minutes, lam, experiments, mean_wagons, std_wagons)
+
+        if seed_text:
+            np.random.seed(int(seed_text))
+
+        first_arrivals, first_wagons, summary_stats = run_multiple_experiments(
+            T_minutes=T_minutes,
+            lam=lam,
+            experiments=experiments,
+            mean_wagons=mean_wagons,
+            std_wagons=std_wagons
+        )
+
+        single_stats = calculate_statistics(
+            first_arrivals,
+            first_wagons,
+            T_minutes,
+            lam,
+            mean_wagons
+        )
+
+        print_event_table(first_arrivals, first_wagons, start_hour, start_minute)
+        print_statistics(single_stats, summary_stats)
+
+        plot_results(
+            first_arrivals,
+            first_wagons,
+            T_minutes,
+            lam,
+            mean_wagons,
+            start_hour,
+            start_minute
+        )
+
+    except ValueError as error:
+        print(f"Ошибка ввода: {error}")
+
+
+if __name__ == "__main__":
+    main()
