@@ -1,0 +1,138 @@
+import json
+import os
+import shutil
+from pathlib import Path
+
+import mlflow
+import mlflow.sklearn
+from mlflow import MlflowClient
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI', 'http://127.0.0.1:5000'))
+c = MlflowClient()
+
+try:
+    v = c.get_model_version_by_alias('adult-classifier', 'champion')
+except Exception as e:
+    print(f"Ошибка получения модели: {e}")
+    raise
+
+model_uri = f'models:/adult-classifier/{v.version}'
+print(f"Загрузка модели из {model_uri}...")
+model = mlflow.sklearn.load_model(model_uri)
+
+out = Path('exported_model')
+if out.exists():
+    shutil.rmtree(out)
+mlflow.sklearn.save_model(
+    model, 
+    str(out), 
+    pip_requirements=Path('requirements.txt').read_text().splitlines()
+)
+
+columns = [
+    'age', 'workclass', 'fnlwgt', 'education', 'education-num',
+    'marital-status', 'occupation', 'relationship', 'race', 'sex',
+    'capital-gain', 'capital-loss', 'hours-per-week', 'native-country',
+    'income'
+]
+
+df = pd.read_csv(
+    'data/adult.data',
+    header=None,
+    names=columns,
+    sep=r',\s*',
+    na_values='?',
+    skipinitialspace=True,
+)
+
+drop_cols = ['fnlwgt', 'education']
+X = df.drop(columns=drop_cols + ['income'])
+y = (df['income'] == '>50K').astype(int)
+
+cat_cols = ['workclass', 'marital-status', 'occupation', 'relationship',
+            'race', 'sex', 'native-country']
+num_cols = ['age', 'education-num', 'capital-gain', 'capital-loss', 'hours-per-week']
+
+X_tr_val, X_test, y_tr_val, y_test = train_test_split(
+    X, y, test_size=0.25, random_state=42, stratify=y
+)
+X_train, X_val, y_train_bin, y_val_bin = train_test_split(
+    X_tr_val, y_tr_val, test_size=0.20 / 0.75, random_state=42, stratify=y_tr_val
+)
+
+median_cnt = y_train.median()
+y_test_bin = (y_test > median_cnt).astype(int)
+
+metadata = {
+    'name': 'adult-classifier',
+    'version': v.version,
+    'run_id': v.run_id,
+    'features_numeric': num_cols,
+    'features_categorical': cat_cols,
+    'classes': ['<=50K', '>50K'],
+    'median_threshold': float(median_cnt)
+}
+(out / 'metadata.json').write_text(json.dumps(metadata, indent=2))
+
+request = {'instances': X_test.iloc[:3].to_dict(orient='records')}
+Path('sample_request.json').write_text(json.dumps(request, indent=2))
+
+Path('expected_predictions.json').write_text(json.dumps(model.predict(X_test.iloc[:3]).tolist()))
+
+print(json.dumps(metadata, indent=2))
+
+_________________________________________
+
+
+import json
+from pathlib import Path
+
+import mlflow.sklearn
+import pandas as pd
+from sklearn.metrics import accuracy_score, f1_score
+from sklearn.model_selection import train_test_split
+
+print("Загрузка локальной модели...")
+m = mlflow.sklearn.load_model('exported_model')
+
+columns = [
+    'age', 'workclass', 'fnlwgt', 'education', 'education-num',
+    'marital-status', 'occupation', 'relationship', 'race', 'sex',
+    'capital-gain', 'capital-loss', 'hours-per-week', 'native-country',
+    'income'
+]
+
+df = pd.read_csv(
+    'data/adult.data',
+    header=None,
+    names=columns,
+    sep=r',\s*',
+    na_values='?',
+    skipinitialspace=True,
+)
+
+drop_cols = ['fnlwgt', 'education']
+X = df.drop(columns=drop_cols + ['income'])
+y = (df['income'] == '>50K').astype(int)
+
+X_tr_val, X_test, y_tr_val, y_test = train_test_split(
+    X, y, test_size=0.25, random_state=42, stratify=y
+)
+X_train, X_val, y_train_bin, y_val_bin = train_test_split(
+    X_tr_val, y_tr_val, test_size=0.20 / 0.75, random_state=42, stratify=y_tr_val
+)
+
+median_cnt = y_train.median()
+y_test_bin = (y_test > median_cnt).astype(int)
+
+pred = m.predict(X_test)
+
+r = {
+    'test_accuracy': accuracy_score(y_test_bin, pred), 
+    'test_f1_macro': f1_score(y_test_bin, pred, average='macro')
+}
+
+Path('test_metrics.json').write_text(json.dumps(r, indent=2))
+print(json.dumps(r, indent=2))
