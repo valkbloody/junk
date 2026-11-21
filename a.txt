@@ -1,0 +1,176 @@
+python
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import mlflow
+import mlflow.sklearn
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, f1_score, ConfusionMatrixDisplay
+from mlflow.models import infer_signature
+from mlflow.data.sources import LocalArtifactDatasetSource
+
+p = argparse.ArgumentParser()
+p.add_argument('--algorithm', choices=['lr', 'rf'], default='lr')
+p.add_argument('--c', type=float, default=1.0)
+p.add_argument('--trees', type=int, default=100)
+p.add_argument('--depth', type=int, default=5)
+p.add_argument('--register', action='store_true')
+a = p.parse_args()
+
+mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI', 'http://127.0.0.1:5000'))
+mlflow.set_experiment('lab4-adult')
+
+columns = [
+    'age', 'workclass', 'fnlwgt', 'education', 'education-num',
+    'marital-status', 'occupation', 'relationship', 'race', 'sex',
+    'capital-gain', 'capital-loss', 'hours-per-week', 'native-country',
+    'income'
+]
+
+
+df = pd.read_csv(
+    'data/adult.data',
+    header=None,
+    names=columns,
+    sep=r',\s*',
+    na_values='?',
+    skipinitialspace=True,
+)
+
+df_test = pd.read_csv(
+    'data/adult.test',
+    header=None,
+    names=columns,
+    sep=r',\s*',
+    na_values='?',
+    skipinitialspace=True,
+    skiprows=1,  # первая строка в adult.test — заголовок "|1x3 Cross validator"
+)
+
+df_test['income'] = df_test['income'].str.rstrip('.')
+
+drop_cols = ['fnlwgt', 'education']
+X = df.drop(columns=drop_cols + ['income'])
+y = (df['income'] == '>50K').astype(int)
+
+cat_cols = ['workclass', 'marital-status', 'occupation', 'relationship',
+            'race', 'sex', 'native-country']
+num_cols = ['age', 'education-num', 'capital-gain', 'capital-loss', 'hours-per-week']
+
+
+from sklearn.model_selection import train_test_split
+
+X_tr_val, X_test, y_tr_val, y_test = train_test_split(
+    X, y, test_size=0.25, random_state=42, stratify=y
+)
+X_train, X_val, y_train_bin, y_val_bin = train_test_split(
+    X_tr_val, y_tr_val, test_size=0.20 / 0.75, random_state=42, stratify=y_tr_val
+)
+y_test_bin = y_test
+
+num_pipe = make_pipeline(
+    SimpleImputer(strategy='median'),   # ? в числовых → медиана
+    StandardScaler(),
+)
+cat_pipe = make_pipeline(
+    SimpleImputer(strategy='most_frequent'),  # ? в категориальных → мода
+    OneHotEncoder(handle_unknown='ignore'),
+)
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', num_pipe, num_cols),
+        ('cat', cat_pipe, cat_cols),
+    ]
+)
+
+if a.algorithm == 'lr':
+    model = make_pipeline(
+        preprocessor,
+        LogisticRegression(C=a.c, max_iter=2000, random_state=42),
+    )
+else:
+    model = make_pipeline(
+        preprocessor,
+        RandomForestClassifier(
+            n_estimators=a.trees, max_depth=a.depth,
+            random_state=42, n_jobs=1,
+        ),
+    )
+
+digest = hashlib.sha256(df.to_csv(index=False).encode()).hexdigest()
+with mlflow.start_run(run_name=f'adult-{a.algorithm}-experiment') as run:
+    mlflow.log_params({
+        'algorithm': a.algorithm, 'seed': 42, 'dataset': 'adult',
+        'n_train': len(X_train), 'n_validation': len(X_val), 'n_test': len(X_test),
+        'dropped_cols': ','.join(drop_cols),
+    })
+    if a.algorithm == 'lr':
+        mlflow.log_param('C', a.c)
+    else:
+        mlflow.log_params({'trees': a.trees, 'depth': a.depth})
+
+    mlflow.set_tags({
+        'dataset_sha256': digest,
+        'purpose': 'lab4',
+        'selection_metric': 'val_f1_macro',
+    })
+
+    model.fit(X_train, y_train_bin)
+
+    pred_val = model.predict(X_val)
+    mlflow.log_metrics({
+        'val_accuracy': accuracy_score(y_val_bin, pred_val),
+        'val_f1_macro': f1_score(y_val_bin, pred_val, average='macro'),
+    })
+
+    source = LocalArtifactDatasetSource('UCI Adult Census Income')
+    mlflow.log_input(
+        mlflow.data.from_pandas(df, source=source, targets='income'),
+        context='full_dataset_before_split',
+    )
+    mlflow.log_dict(
+        {
+            'train_indices': X_train.index.tolist(),
+            'validation_indices': X_val.index.tolist(),
+            'test_indices': X_test.index.tolist(),
+            'features_numeric': num_cols,
+            'features_categorical': cat_cols,
+            'classes': ['<=50K', '>50K'],
+        },
+        'split.json',
+    )
+
+    mlflow.log_artifact(__file__, artifact_path='source')
+    mlflow.log_artifact('requirements.txt', artifact_path='source')
+    mlflow.log_artifact('data/adult.names', artifact_path='source')
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    ConfusionMatrixDisplay.from_predictions(y_val_bin, pred_val, ax=ax)
+    mlflow.log_figure(fig, 'validation_confusion_matrix.png')
+    plt.close(fig)
+
+    info = mlflow.sklearn.log_model(
+        model,
+        name='model',
+        input_example=X_train.head(2),
+        signature=infer_signature(X_train, model.predict(X_train)),
+        pip_requirements=Path('requirements.txt').read_text().splitlines(),
+        skops_trusted_types=["sklearn.tree._tree.Tree"],
+    )
+
+    print(json.dumps({'run_id': run.info.run_id, 'model_uri': info.model_uri}, indent=2))
+
+    if a.register:
+        mv = mlflow.register_model(info.model_uri, 'adult-classifier')
+        print('REGISTERED_VERSION=', mv.version)
